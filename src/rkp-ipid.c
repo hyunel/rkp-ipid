@@ -9,6 +9,7 @@
 #include <linux/netdevice.h>
 #include <linux/random.h>
 #include <linux/moduleparam.h>
+#include <linux/hashtable.h>
 
 MODULE_AUTHOR("Haonan Chen");
 MODULE_DESCRIPTION("Modify IDs of IP headers into numerically increasing order, for anti-detection of NAT.");
@@ -20,7 +21,13 @@ static u_int32_t mark_random = 0x20;
 module_param(mark_random, uint, 0);
 
 static struct nf_hook_ops nfho;
-static u_int16_t id_next;
+
+struct ifid {
+	int ifindex;
+	u_int16_t id_next;
+	struct hlist_node hash_list;
+};
+static DEFINE_HASHTABLE(hash_table, 3);
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,2,0)
 unsigned int hook_funcion(void *priv, struct sk_buff *skb, const struct nf_hook_state *state)
@@ -52,8 +59,32 @@ unsigned int hook_funcion(const struct nf_hook_ops *ops, struct sk_buff *skb, co
 		n_not_writable++;
 		return NF_ACCEPT;
 	}
+
+	#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,2,0)
+		const struct net_device *out = state->out;
+	#endif
 	
-	iph = ip_hdr(skb);
+	struct ifid *temp, *object = NULL;
+	hash_for_each_possible(hash_table, temp, hash_list, out->ifindex) {
+		if (temp->ifindex != out->ifindex) continue;
+		object = temp;
+		break;
+	}
+
+	if(unlikely(!object)) {
+		printk("rkp-ipid: Found new interface, ifindex=%d", out->ifindex);
+		object = kmalloc(sizeof(struct ifid), GFP_KERNEL);
+		if (!object) {
+			printk("rkp-ipid: Failed to allocate ifid object. Please make sure the router has enough memory.\n");
+			return NF_ACCEPT;
+		}
+
+		object->ifindex = out->ifindex;
+		get_random_bytes(&(object->id_next), 2);
+		hash_add(hash_table, &(object->hash_list), out->ifindex);
+	}
+
+	
 	if(skb -> mark & mark_random)
 	{
 		get_random_bytes(&(iph -> id), 2);
@@ -62,8 +93,8 @@ unsigned int hook_funcion(const struct nf_hook_ops *ops, struct sk_buff *skb, co
 	}
 	else
 	{
-		iph -> id = ntohs(id_next);
-		id_next++;
+		iph -> id = ntohs(object->id_next);
+		object->id_next++;
 		n_modified++;
 	}
 
@@ -93,7 +124,6 @@ static int __init hook_init(void)
 #else
     ret = nf_register_hook(&nfho);
 #endif
-	get_random_bytes(&(id_next), 2);
 	printk("rkp-ipid: Started, version=%d, mark_capture=0x%x. mark_random=0x%x.\n", VERSION, mark_capture, mark_random);
 	printk("rkp-ipid: nf_register_hook returnd %d.\n", ret);
 

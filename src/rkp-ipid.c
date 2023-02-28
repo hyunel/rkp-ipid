@@ -56,56 +56,55 @@ unsigned int hook_funcion(const struct nf_hook_ops *ops, struct sk_buff *skb, co
 			n_not_writable = 1;
 			printk("rkp-ipid: There is a package not wirtable. Please make sure the router has enough memory.\n");
 		}
-		n_not_writable++;
+		++n_not_writable;
 		return NF_ACCEPT;
 	}
-
-	#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,2,0)
-		const struct net_device *out = state->out;
-	#endif
-	
-	struct ifid *temp, *object = NULL;
-	hash_for_each_possible(hash_table, temp, hash_list, out->ifindex) {
-		if (temp->ifindex != out->ifindex) continue;
-		object = temp;
-		break;
-	}
-
-	if(unlikely(!object)) {
-		printk("rkp-ipid: Found new interface, ifindex=%d", out->ifindex);
-		object = kmalloc(sizeof(struct ifid), GFP_KERNEL);
-		if (!object) {
-			printk("rkp-ipid: Failed to allocate ifid object. Please make sure the router has enough memory.\n");
-			return NF_ACCEPT;
-		}
-
-		object->ifindex = out->ifindex;
-		get_random_bytes(&(object->id_next), 2);
-		hash_add(hash_table, &(object->hash_list), out->ifindex);
-	}
-
 	
 	if(skb -> mark & mark_random)
 	{
 		get_random_bytes(&(iph -> id), 2);
-		n_modified++;
-		n_random++;
+		++n_modified;
+		++n_random;
 	}
 	else
 	{
+		#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,2,0)
+			const struct net_device *out = state->out;
+		#endif
+		
+		struct ifid *temp, *object = NULL;
+		hash_for_each_possible(hash_table, temp, hash_list, out->ifindex) {
+			if (temp->ifindex != out->ifindex) continue;
+			object = temp;
+			break;
+		}
+
+		if(unlikely(!object)) {
+			printk("rkp-ipid: Found new interface, ifindex=%d", out->ifindex);
+			object = kmalloc(sizeof(struct ifid), GFP_KERNEL);
+			if (!object) {
+				printk("rkp-ipid: Failed to allocate ifid object. Please make sure the router has enough memory.\n");
+				return NF_ACCEPT;
+			}
+
+			object->ifindex = out->ifindex;
+			get_random_bytes(&(object->id_next), 2);
+			hash_add(hash_table, &(object->hash_list), out->ifindex);
+		}
+		
 		iph -> id = ntohs(object->id_next);
-		object->id_next++;
-		n_modified++;
+		++object->id_next;
+		++n_modified;
 	}
 
 	iph->check = 0;
 	iph->check = ip_fast_csum(iph, iph->ihl);
 
-	if(n_modified_lastprint * 2 == n_modified)
+	if((n_modified_lastprint << 1) == n_modified)
 	{
 		printk("rkp-ipid: Successfully modified %u packages, in which %u IDs are in increasing order, %u IDs are random. There are %u packages not writable.\n",
 				n_modified, n_modified - n_random, n_random, n_not_writable);
-		n_modified_lastprint *= 2;
+		n_modified_lastprint <<= 1;
 	}
 
 	return NF_ACCEPT;
